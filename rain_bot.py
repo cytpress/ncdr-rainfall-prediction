@@ -1,7 +1,7 @@
 import os
 import json
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -84,8 +84,12 @@ def main():
             return "🌦️"
         return "☀️"
 
-    # Time calculation
-    now = datetime.now()
+    # Load Threshold from env (default to 15)
+    threshold = float(os.getenv("RAIN_THRESHOLD", "15"))
+
+    # Time calculation (Force UTC+8 for consistency)
+    tz = timezone(timedelta(hours=8))
+    now = datetime.now(tz)
     t10_tm = (now + timedelta(minutes=10)).strftime("%H:%M")
     t30_tm = (now + timedelta(minutes=30)).strftime("%H:%M")
     t60_tm = (now + timedelta(minutes=60)).strftime("%H:%M")
@@ -97,17 +101,18 @@ def main():
         f"{icon(t60)} {t60_tm}: {round(float(t60), 2)}"
     )
 
-    # Send if any prediction >= 15 dBZ
-    if any(float(v) >= 15 for v in [t10, t30, t60]):
+    # Send if any prediction >= threshold
+    if any(float(v) >= threshold for v in [t10, t30, t60]):
         print(msg)
         requests.post(
             f"https://ntfy.sh/{PRED_CHANNEL}",
             data=msg.encode("utf-8"),
-            headers={"Title": "Rain Plan Report (ALERT)", "Tags": "umbrella,bar_chart"},
+            headers={"Title": f"Rain Plan Report (ALERT >= {threshold})", "Tags": "umbrella,bar_chart"},
         )
     else:
         print(msg)
-        print("Skipping ntfy (Max < 15 dBZ).")
+        print(f"Skipping ntfy (Max < {threshold} dBZ).")
+
 
 
 if __name__ == "__main__":
