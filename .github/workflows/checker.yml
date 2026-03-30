@@ -1,0 +1,27 @@
+name: Rain Prediction Checker
+on:
+    schedule:
+        - cron: "*/10 * * * *" # 每 10 分鐘執行一次
+    workflow_dispatch: # 允許手動從網頁執行測試
+
+jobs:
+    run-bot:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout Code
+              uses: actions/checkout@v3
+
+            - name: Setup Python
+              uses: actions/setup-python@v4
+              with:
+                  python-version: "3.13"
+
+            - name: Install Dependencies
+              run: pip install -r requirements.txt
+
+            - name: Run Rain Bot
+              env:
+                  LOCATION_CHANNEL: ${{ secrets.LOCATION_CHANNEL }}
+                  NCDR_API_TOKEN: ${{ secrets.NCDR_API_TOKEN }}
+                  PREDICTION_CHANNEL: ${{ secrets.PREDICTION_CHANNEL }}
+              run: python rain_bot.py
