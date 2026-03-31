@@ -1,7 +1,7 @@
 name: Rain Prediction Checker
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/17 * * * *"
   workflow_dispatch:
 
 jobs:
