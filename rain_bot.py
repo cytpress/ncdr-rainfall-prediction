@@ -10,6 +10,10 @@ NCDR_TOKEN = os.getenv("NCDR_API_TOKEN")
 LOC_CHANNEL = os.getenv("LOCATION_CHANNEL")
 PRED_CHANNEL = os.getenv("PREDICTION_CHANNEL")
 NCDR_URL = "https://dataapi2.ncdr.nat.gov.tw/NCDR/MaxDBZ?DataFormat=JSON"
+RAIN_THRESHOLD = 15
+NOMINATIM_USER_AGENT = (
+    "RainfallBot (https://github.com/cytpress/ncdr-rainfall-prediction)"
+)
 
 
 def get_location():
@@ -28,8 +32,51 @@ def get_location():
     return None, None
 
 
+def get_last_state():
+    """Check the last message from PRED_CHANNEL to determine if we were in an alert state."""
+    try:
+        url = f"https://ntfy.sh/{PRED_CHANNEL}/json?poll=1&last=1"
+        resp = requests.get(url, timeout=10).text.strip()
+        if not resp:
+            return False
+        for line in reversed(resp.split("\n")):
+            data = json.loads(line)
+            if data.get("event") == "message":
+                title = data.get("title", "")
+                return "ALERT" in title
+    except Exception:
+        pass
+    return False
+
+
+def get_address(lat, lon):
+    """Reverse geocode coordinates to a Taiwan address (City District Road) using Nominatim."""
+    try:
+        url = f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&addressdetails=1"
+        headers = {"User-Agent": NOMINATIM_USER_AGENT}
+        resp = requests.get(url, headers=headers, timeout=10).json()
+        addr = resp.get("address", {})
+
+        # Parse Taiwan address: City/County + District/Suburb + Road
+        city = addr.get("city") or addr.get("county") or ""
+        dist = (
+            addr.get("suburb")
+            or addr.get("district")
+            or addr.get("township")
+            or addr.get("town")
+            or ""
+        )
+        road = addr.get("road") or ""
+
+        full_addr = f"{city}{dist}{road}"
+        return full_addr if full_addr else f"{lat}, {lon}"
+    except Exception as e:
+        print(f"Nominatim Error: {e}")
+        return f"{lat}, {lon}"
+
+
 def get_rain_report(lat, lon):
-    """從 NCDR 找最近的網格並提取 10, 30, 60 分鐘預測值"""
+    """Fetch rainfall forecasts (10, 30, 60 min) for the nearest grid from NCDR."""
     try:
         lat, lon = float(lat), float(lon)
         headers = {"token": NCDR_TOKEN}
@@ -74,15 +121,13 @@ def main():
         return
 
     def icon(v):
+        if v >= 40:
+            return "🟥"
         if v >= 30:
-            return "⛈️"
-        if v >= 20:
-            return "🌧️"
-        if v >= 10:
-            return "🌦️"
+            return "🟧"
+        if v >= RAIN_THRESHOLD:
+            return "🟩"
         return "☀️"
-
-    threshold = float(os.getenv("RAIN_THRESHOLD", "15"))
 
     # Time calculation (Force UTC+8 for consistency)
     tz = timezone(timedelta(hours=8))
@@ -91,29 +136,49 @@ def main():
     t30_tm = (now + timedelta(minutes=30)).strftime("%H:%M")
     t60_tm = (now + timedelta(minutes=60)).strftime("%H:%M")
 
-    msg = (
-        f"📍 Loc: {round(lat, 3)}, {round(lon, 3)}\n"
-        f"{icon(t10)} {t10_tm}: {round(float(t10), 2)}\n"
-        f"{icon(t30)} {t30_tm}: {round(float(t30), 2)}\n"
-        f"{icon(t60)} {t60_tm}: {round(float(t60), 2)}"
-    )
-
     # Simplified log message
     log_vals = f"[{t10}, {t30}, {t60}]"
 
-    # Send if any prediction >= threshold
-    if any(float(v) >= threshold for v in [t10, t30, t60]):
-        print(f"Pred: {log_vals} -> Sending Notification.")
+    # Send if state changes
+    last_was_alert = get_last_state()
+    is_raining = any(float(v) >= RAIN_THRESHOLD for v in [t10, t30, t60])
+
+    if is_raining:
+        if not last_was_alert:
+            addr_str = get_address(lat, lon)
+            print(f"Pred: {log_vals} -> Rain Started (Sending Alert).")
+            # Update msg with address
+            final_msg = (
+                f"📍 {addr_str}\n"
+                f"{icon(t10)} {t10_tm}: {round(float(t10), 2)}\n"
+                f"{icon(t30)} {t30_tm}: {round(float(t30), 2)}\n"
+                f"{icon(t60)} {t60_tm}: {round(float(t60), 2)}\n\n"
+                f"(Data © OSM contributors)"
+            )
+            requests.post(
+                f"https://ntfy.sh/{PRED_CHANNEL}",
+                data=final_msg.encode("utf-8"),
+                headers={
+                    "Title": f"Rain Report (ALERT >= {RAIN_THRESHOLD} dBZ)",
+                },
+            )
+        else:
+            print(f"Pred: {log_vals} -> Continuous Rain (Muted).")
+    elif last_was_alert:
+        # Rain stopped: Send a clear notification to reset state
+        addr_str = get_address(lat, lon)
+        print(f"Pred: {log_vals} -> Rain Stopped (Sending Clear).")
         requests.post(
             f"https://ntfy.sh/{PRED_CHANNEL}",
-            data=msg.encode("utf-8"),
+            data=f"Rain has stopped at {addr_str}.\n(Data © OSM contributors)".encode(
+                "utf-8"
+            ),
             headers={
-                "Title": f"Rain Plan Report (ALERT >= {threshold})",
-                "Tags": "umbrella,bar_chart",
+                "Title": f"Rain Report (CLEAR < {RAIN_THRESHOLD} dBZ)",
             },
         )
     else:
-        print(f"Pred: {log_vals} -> Skipping (Max < {threshold} dBZ).")
+        print(f"Pred: {log_vals} -> Clear (Skipping).")
 
 
 if __name__ == "__main__":
