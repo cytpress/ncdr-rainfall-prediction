@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import requests
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
@@ -11,6 +12,7 @@ LOC_CHANNEL = os.getenv("LOCATION_CHANNEL")
 PRED_CHANNEL = os.getenv("PREDICTION_CHANNEL")
 NCDR_URL = "https://dataapi2.ncdr.nat.gov.tw/NCDR/MaxDBZ?DataFormat=JSON"
 RAIN_THRESHOLD = 15
+RAIN_INTENSIFY_THRESHOLD = 5
 NOMINATIM_USER_AGENT = (
     "RainfallBot (https://github.com/cytpress/ncdr-rainfall-prediction)"
 )
@@ -33,20 +35,25 @@ def get_location():
 
 
 def get_last_state():
-    """Check the last message from PRED_CHANNEL to determine if we were in an alert state."""
+    """Check the last message from PRED_CHANNEL to determine if we were in an alert state and what the max rain was."""
     try:
         url = f"https://ntfy.sh/{PRED_CHANNEL}/json?poll=1&last=1"
         resp = requests.get(url, timeout=10).text.strip()
         if not resp:
-            return False
+            return False, 0.0
         for line in reversed(resp.split("\n")):
             data = json.loads(line)
             if data.get("event") == "message":
                 title = data.get("title", "")
-                return "ALERT" in title
+                is_alert = "ALERT" in title or "INTENSIFIED" in title
+                msg = data.get("message", "")
+                # Extract numbers after ":" which represent rainfall values
+                vals = re.findall(r":\s*([\d.]+)", msg)
+                max_val = max([float(v) for v in vals]) if vals else 0.0
+                return is_alert, max_val
     except Exception:
         pass
-    return False
+    return False, 0.0
 
 
 def get_address(lat, lon):
@@ -140,14 +147,27 @@ def main():
     log_vals = f"[{t10}, {t30}, {t60}]"
 
     # Send if state changes
-    last_was_alert = get_last_state()
-    is_raining = any(float(v) >= RAIN_THRESHOLD for v in [t10, t30, t60])
+    last_was_alert, last_max = get_last_state()
+    curr_max = max(float(t10), float(t30), float(t60))
+    is_raining = curr_max >= RAIN_THRESHOLD
 
     if is_raining:
-        if not last_was_alert:
+        # Trigger push if:
+        # 1. Start raining (not last alert)
+        # 2. Rain significantly intensified (curr_max >= last_max + threshold)
+        intensified = last_was_alert and (curr_max >= last_max + RAIN_INTENSIFY_THRESHOLD)
+
+        if not last_was_alert or intensified:
             addr_str = get_address(lat, lon)
-            print(f"Pred: {log_vals} -> Rain Started (Sending Alert).")
-            # Update msg with address
+            if not last_was_alert:
+                print(f"Pred: {log_vals} -> Rain Started (Sending Alert).")
+                title = f"Rain Report (ALERT >= {RAIN_THRESHOLD} dBZ)"
+            else:
+                print(
+                    f"Pred: {log_vals} -> Rain Intensified (+{round(curr_max - last_max, 1)} dBZ). Sending alert."
+                )
+                title = "INTENSIFIED"
+
             final_msg = (
                 f"📍 {addr_str}\n"
                 f"{icon(t10)} {t10_tm}: {round(float(t10), 2)}\n"
@@ -159,11 +179,13 @@ def main():
                 f"https://ntfy.sh/{PRED_CHANNEL}",
                 data=final_msg.encode("utf-8"),
                 headers={
-                    "Title": f"Rain Report (ALERT >= {RAIN_THRESHOLD} dBZ)",
+                    "Title": title,
                 },
             )
         else:
-            print(f"Pred: {log_vals} -> Continuous Rain (Muted).")
+            print(
+                f"Pred: {log_vals} -> Continuous Rain (Muted). Current: {curr_max}, Last: {last_max}"
+            )
     elif last_was_alert:
         # Rain stopped: Send a clear notification to reset state
         addr_str = get_address(lat, lon)
