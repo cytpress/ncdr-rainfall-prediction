@@ -95,5 +95,4 @@ def process_manual_route_check(short_url, current_loc):
         msg = f"📍 目的地：{addr_dest}\n📏 距離：{round(dist_km, 1)}km\n✅ 整段路徑採樣無降雨預報。"
         priority = "default"
         
-    send_ntfy(msg, title="🛣️ 路徑天氣報", priority=priority)
     return msg
