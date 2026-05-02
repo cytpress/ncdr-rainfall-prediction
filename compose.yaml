@@ -1,0 +1,10 @@
+services:
+  rainfall-bot:
+    build: .
+    container_name: rainfall-bot
+    restart: unless-stopped
+    ports:
+      - 8000:8000
+    environment:
+      - NCDR_API_TOKEN=${NCDR_API_TOKEN}
+      - PREDICTION_CHANNEL=${PREDICTION_CHANNEL}
