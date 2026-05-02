@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+.bun/
+bun.lockb
+
+# Environment
+.env
+.env.local
+
+# Debug logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db

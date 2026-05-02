@@ -1,0 +1,15 @@
+{
+  "name": "ncdr-rainfall-prediction-ts",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "bun run index.ts",
+    "dev": "bun --watch index.ts"
+  },
+  "dependencies": {
+    "hono": "^4.12.15",
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

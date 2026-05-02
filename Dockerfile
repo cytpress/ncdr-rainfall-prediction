@@ -1,12 +1,16 @@
-FROM python:3.11-slim
+FROM oven/bun:latest
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy package files and install
+COPY package.json bun.lockb* ./
+RUN bun install
 
+# Copy all application code
 COPY . .
 
+# Expose the port
 EXPOSE 8000
 
-CMD ["python", "rain_bot.py"]
+# Run the app
+CMD ["bun", "run", "index.ts"]
