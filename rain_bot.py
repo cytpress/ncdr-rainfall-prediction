@@ -1,9 +1,9 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 import uvicorn
 from fastapi import FastAPI, Request, BackgroundTasks
-from dotenv import load_dotenv
 from services import process_automatic_alert, process_manual_route_check
-
-load_dotenv()
 
 app = FastAPI(title="NCDR Rainfall Prediction Bot")
 
