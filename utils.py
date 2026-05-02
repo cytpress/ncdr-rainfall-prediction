@@ -4,31 +4,35 @@ import math
 import requests
 import json
 
-NCDR_TOKEN = os.getenv("NCDR_API_TOKEN")
+# Fetching at runtime instead of module level to be safe
+def get_ncdr_token(): return os.getenv("NCDR_API_TOKEN")
+def get_pred_channel(): return os.getenv("PREDICTION_CHANNEL")
+
 NCDR_URL = "https://dataapi2.ncdr.nat.gov.tw/NCDR/MaxDBZ?DataFormat=JSON"
 NOMINATIM_USER_AGENT = "RainfallBot (https://github.com/cytpress/ncdr-rainfall-prediction)"
 
 def get_full_rain_data():
-    """Fetch all rainfall grids from NCDR."""
+    token = get_ncdr_token()
+    print(f"[Log] Fetching NCDR data with token: {token[:5]}***")
     try:
-        headers = {"token": NCDR_TOKEN}
+        headers = {"token": token}
         resp = requests.get(NCDR_URL, headers=headers, timeout=30)
+        print(f"[Log] NCDR Response Status: {resp.status_code}")
         grids = resp.json()
         if isinstance(grids, list): return grids
         if isinstance(grids, dict): return grids.get("Data") or grids.get("features") or grids.get("list") or []
     except Exception as e:
-        print(f"NCDR API Error: {e}")
+        print(f"[Error] NCDR API Error: {e}")
     return []
 
 def get_rain_at_point(lat, lon, rain_data):
-    """Lookup rain values for a point."""
     for g in rain_data:
         if abs(float(g["Lat"]) - lat) < 0.015 and abs(float(g["Lon"]) - lon) < 0.015:
             return g.get("T+1"), g.get("T+3"), g.get("T+6")
     return None, None, None
 
 def get_address(lat, lon):
-    """Reverse geocode coordinates."""
+    print(f"[Log] Reverse geocoding for {lat}, {lon}")
     try:
         url = f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&addressdetails=1"
         headers = {"User-Agent": NOMINATIM_USER_AGENT}
@@ -39,10 +43,11 @@ def get_address(lat, lon):
         road = addr.get("road") or ""
         full_addr = f"{city}{dist}{road}"
         return full_addr if full_addr else f"{lat}, {lon}"
-    except Exception: return f"{lat}, {lon}"
+    except Exception as e:
+        print(f"[Error] Nominatim Error: {e}")
+        return f"{lat}, {lon}"
 
 def calculate_distance(lat1, lon1, lat2, lon2):
-    """Calculate distance in km."""
     R = 6371
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
@@ -51,20 +56,28 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     return R * c
 
 def expand_google_maps_url(short_url):
-    """Resolve short URL."""
+    print(f"[Log] Expanding URL: {short_url}")
     try:
-        resp = requests.get(short_url, allow_redirects=True, timeout=10)
+        # Use a real user agent to avoid bot detection
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        resp = requests.get(short_url, allow_redirects=True, timeout=10, headers=headers)
         long_url = resp.url
+        print(f"[Log] Expanded URL: {long_url}")
         match = re.search(r'!3d([\d\.]+)!4d([\d\.]+)', long_url)
-        if match: return float(match.group(1)), float(match.group(2))
-    except Exception: pass
+        if match: 
+            print(f"[Log] Extracted Coordinates: {match.group(1)}, {match.group(2)}")
+            return float(match.group(1)), float(match.group(2))
+    except Exception as e:
+        print(f"[Error] URL Expansion Error: {e}")
     return None, None
 
-def send_ntfy(channel, message, title=None, priority="default"):
-    """Centralized ntfy sender."""
+def send_ntfy(message, title=None, priority="default"):
+    channel = get_pred_channel()
+    print(f"[Log] Sending ntfy to channel: {channel}")
     try:
         headers = {"Priority": priority}
         if title: headers["Title"] = title.encode('utf-8').decode('latin-1')
-        requests.post(f"https://ntfy.sh/{channel}", data=message.encode("utf-8"), headers=headers)
+        resp = requests.post(f"https://ntfy.sh/{channel}", data=message.encode("utf-8"), headers=headers, timeout=10)
+        print(f"[Log] ntfy Response: {resp.status_code}")
     except Exception as e:
-        print(f"ntfy Error: {e}")
+        print(f"[Error] ntfy Sending Failed: {e}")

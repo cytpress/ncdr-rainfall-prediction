@@ -3,16 +3,15 @@ import json
 import re
 import math
 from datetime import datetime, timedelta, timezone
-from utils import get_full_rain_data, get_rain_at_point, get_address, calculate_distance, expand_google_maps_url, send_ntfy
+from utils import get_full_rain_data, get_rain_at_point, get_address, calculate_distance, expand_google_maps_url, send_ntfy, get_pred_channel
 
-PRED_CHANNEL = os.getenv("PREDICTION_CHANNEL")
 RAIN_THRESHOLD = 15
 RAIN_INTENSIFY_THRESHOLD = 5
 
 def get_last_state():
-    """Check the last state from ntfy channel."""
+    channel = get_pred_channel()
     try:
-        url = f"https://ntfy.sh/{PRED_CHANNEL}/json?poll=1&last=1"
+        url = f"https://ntfy.sh/{channel}/json?poll=1&last=1"
         import requests
         resp = requests.get(url, timeout=10).text.strip()
         if not resp: return False, 0.0
@@ -25,19 +24,22 @@ def get_last_state():
                 vals = re.findall(r":\s*([\d.]+)", msg)
                 max_val = max([float(v) for v in vals]) if vals else 0.0
                 return is_alert, max_val
-    except: pass
+    except Exception as e:
+        print(f"[Log] Failed to get last state: {e}")
     return False, 0.0
 
 def process_automatic_alert(lat, lon):
-    """LOGIC 1: Automatic background monitoring."""
-    print(f"[Auto-Bot] Checking rain for current location: {lat}, {lon}")
+    print(f"[Service] AUTO: Processing location {lat}, {lon}")
     rain_data = get_full_rain_data()
     t1, t3, t6 = get_rain_at_point(lat, lon, rain_data)
-    if t1 is None: return
+    if t1 is None:
+        print("[Log] No rain data found for current point.")
+        return
 
     curr_max = max(float(t1), float(t3), float(t6))
     last_was_alert, last_max = get_last_state()
     is_raining = curr_max >= RAIN_THRESHOLD
+    print(f"[Log] Current Max: {curr_max}, Last Alert: {last_was_alert}")
 
     if is_raining:
         intensified = last_was_alert and (curr_max >= last_max + RAIN_INTENSIFY_THRESHOLD)
@@ -45,22 +47,25 @@ def process_automatic_alert(lat, lon):
             addr = get_address(lat, lon)
             title = "INTENSIFIED" if intensified else "Rain Alert"
             msg = f"📍 {addr}\n強度：{curr_max} dBZ\nT+10: {t1}\nT+30: {t3}\nT+60: {t6}"
-            send_ntfy(PRED_CHANNEL, msg, title=title, priority="high")
+            send_ntfy(msg, title=title, priority="high")
     elif last_was_alert:
         addr = get_address(lat, lon)
-        send_ntfy(PRED_CHANNEL, f"Rain has stopped at {addr}", title="CLEAR")
+        send_ntfy(f"Rain has stopped at {addr}", title="CLEAR")
 
 def process_manual_route_check(short_url, current_loc):
-    """LOGIC 2: Manual route prediction."""
-    print(f"[Route-Bot] Analyzing route for: {short_url}")
+    print(f"[Service] ROUTE: Starting check for {short_url}")
     dest_lat, dest_lon = expand_google_maps_url(short_url)
+    
     if dest_lat is None:
-        send_ntfy(PRED_CHANNEL, "無法解析地圖網址，請確認分享內容。", title="⚠️ 錯誤")
+        print("[Error] Failed to resolve destination coordinates.")
+        send_ntfy("無法解析地圖網址，請確認分享內容。", title="⚠️ 錯誤")
         return
 
     orig_lat, orig_lon = current_loc["lat"], current_loc["lon"]
+    print(f"[Log] Origin: {orig_lat}, {orig_lon} -> Destination: {dest_lat}, {dest_lon}")
     dist_km = calculate_distance(orig_lat, orig_lon, dest_lat, dest_lon)
     num_steps = max(1, math.ceil(dist_km))
+    print(f"[Log] Total Distance: {dist_km} km, Sampling {num_steps} points.")
     
     rain_data = get_full_rain_data()
     rain_found = False
@@ -81,6 +86,7 @@ def process_manual_route_check(short_url, current_loc):
 
     addr_dest = get_address(dest_lat, dest_lon)
     rain_percent = round((rain_points / (num_steps + 1)) * 100)
+    print(f"[Log] Result: Rain found={rain_found}, Max DBZ={max_dbz}, Pct={rain_percent}%")
     
     if rain_found:
         msg = f"📍 目的地：{addr_dest}\n📏 距離：{round(dist_km, 1)}km\n⛈️ 下雨路段：{rain_percent}%\n🔥 最高強度：{max_dbz}dBZ"
@@ -89,4 +95,4 @@ def process_manual_route_check(short_url, current_loc):
         msg = f"📍 目的地：{addr_dest}\n📏 距離：{round(dist_km, 1)}km\n✅ 整段路徑採樣無降雨預報。"
         priority = "default"
         
-    send_ntfy(PRED_CHANNEL, msg, title="🛣️ 路徑天氣報", priority=priority)
+    send_ntfy(msg, title="🛣️ 路徑天氣報", priority=priority)
