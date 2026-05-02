@@ -55,10 +55,15 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
     return R * c
 
+from urllib.parse import unquote
+
 def expand_google_maps_url(short_url):
-    print(f"[Log] Expanding URL: {short_url}")
+    print(f"[Log] Original input: {short_url}")
+    # Decode URL-encoded characters
+    short_url = unquote(short_url).replace("\\/", "/")
+    print(f"[Log] Decoded URL: {short_url}")
+    
     try:
-        # Use a real user agent to avoid bot detection
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         resp = requests.get(short_url, allow_redirects=True, timeout=10, headers=headers)
         long_url = resp.url

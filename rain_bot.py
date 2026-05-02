@@ -29,16 +29,18 @@ async def owntracks_webhook(request: Request, background_tasks: BackgroundTasks)
     return {"status": "ignored"}
 
 @app.post("/route-check")
-async def route_check_webhook(request: Request, background_tasks: BackgroundTasks):
-    """Entry point for manual route requests."""
+async def route_check_webhook(request: Request):
+    """Entry point for manual route requests (Synchronous)."""
     try:
         data = await request.json()
         url = data.get("url")
         if url:
-            background_tasks.add_task(process_manual_route_check, url, last_known_loc)
-            return {"status": "processing_route"}
-    except: pass
-    return {"status": "error"}
+            # We run this synchronously so we can return the result to the phone
+            result_msg = process_manual_route_check(url, last_known_loc)
+            return result_msg
+    except Exception as e:
+        return f"Error: {str(e)}"
+    return "Ignored"
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
