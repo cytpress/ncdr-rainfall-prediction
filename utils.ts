@@ -4,9 +4,20 @@ const NOMINATIM_USER_AGENT = "RainfallBot (https://github.com/cytpress/ncdr-rain
 export async function getFullRainData(token: string) {
   try {
     const resp = await fetch(NCDR_URL, { headers: { token } });
+    if (!resp.ok) {
+      console.error(`[Error] NCDR API Status: ${resp.status}`);
+      return [];
+    }
     const grids = await resp.json() as any;
+    // Log a small part of the response to see the structure
+    console.log(`[Debug] NCDR Response Data Type: ${typeof grids}, IsArray: ${Array.isArray(grids)}`);
+    
     if (Array.isArray(grids)) return grids;
-    return grids?.Data || grids?.features || grids?.list || [];
+    const finalData = grids?.Data || grids?.features || grids?.list || [];
+    if (finalData.length === 0) {
+      console.warn(`[Warning] NCDR returned empty data. Full response: ${JSON.stringify(grids).substring(0, 200)}`);
+    }
+    return finalData;
   } catch (e) {
     console.error(`[Error] NCDR API Error: ${e}`);
     return [];
@@ -26,14 +37,23 @@ export async function getAddress(lat: number, lon: number) {
   try {
     const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&addressdetails=1`;
     const resp = await fetch(url, { headers: { "User-Agent": NOMINATIM_USER_AGENT } });
+    if (!resp.ok) {
+      console.error(`[Error] Nominatim Status: ${resp.status}`);
+      return `${lat}, ${lon}`;
+    }
     const data = await resp.json() as any;
+    if (data.error) {
+      console.warn(`[Warning] Nominatim Error: ${data.error}`);
+      return `${lat}, ${lon}`;
+    }
     const addr = data.address || {};
     const city = addr.city || addr.county || "";
     const dist = addr.suburb || addr.district || addr.township || addr.town || "";
     const road = addr.road || "";
     const fullAddr = `${city}${dist}${road}`;
     return fullAddr || `${lat}, ${lon}`;
-  } catch {
+  } catch (e) {
+    console.error(`[Error] Reverse Geocoding Exception: ${e}`);
     return `${lat}, ${lon}`;
   }
 }
@@ -53,41 +73,39 @@ const BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKi
 
 export async function expandGoogleMapsUrl(shortUrl: string) {
   try {
-    // Clean and decode URL
-    let decodedUrl = decodeURIComponent(shortUrl);
-    // Handle various escaping scenarios (like \/ or \\/)
-    decodedUrl = decodedUrl.replace(/\\+\//g, "/");
-    
-    // Add protocol if missing (some clients might send //maps.app.goo.gl/...)
+    let decodedUrl = decodeURIComponent(shortUrl).replace(/\\+\//g, "/").trim();
     if (decodedUrl.startsWith("//")) decodedUrl = "https:" + decodedUrl;
 
     const resp = await fetch(decodedUrl, { 
       redirect: 'follow',
-      headers: { "User-Agent": BROWSER_USER_AGENT }
+      headers: { 
+        "User-Agent": BROWSER_USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7"
+      }
     });
     const longUrl = resp.url;
     
-    // 1. Try standard !3d (lat) !4d (lon) - most common for places
+    if (resp.status !== 200) {
+      console.log(`[Warning] URL Expansion for ${decodedUrl} returned status ${resp.status}`);
+    }
+    
+    console.log(`[Debug] Final URL: ${longUrl}`);
+    
     const coordsMatch = longUrl.match(/!3d([-?\d\.]+)!4d([-?\d\.]+)/);
     if (coordsMatch) return [parseFloat(coordsMatch[1]), parseFloat(coordsMatch[2])];
     
-    // 2. Try !2d (lat) !1d (lon) - common in some direction URLs
-    // Note: In Google Maps internal data, !1d is often Lon, !2d is Lat
     const dataMatch = longUrl.match(/!2d([-?\d\.]+)!1d([-?\d\.]+)/);
     if (dataMatch) {
-      // In some contexts it's [Lat, Lon], in others [Lon, Lat]. 
-      // For Taiwan, Lon is ~121, Lat is ~25.
       const val1 = parseFloat(dataMatch[1]);
       const val2 = parseFloat(dataMatch[2]);
-      if (val1 < 90 && val1 > -90 && (val2 > 90 || val2 < -90)) return [val1, val2]; // val1 is lat
-      return [val2, val1]; // assume val2 is lat
+      if (val1 < 90 && val1 > -90 && (val2 > 90 || val2 < -90)) return [val1, val2];
+      return [val2, val1];
     }
 
-    // 3. Try /dir/lat,lon/lat,lon/ format
     const dirMatch = longUrl.match(/\/dir\/[-?\d\.]+,[-?\d\.]+\/([-?\d\.]+),([-?\d\.]+)\//);
     if (dirMatch) return [parseFloat(dirMatch[1]), parseFloat(dirMatch[2])];
 
-    // 4. Try @lat,lon viewport format (fallback)
     const viewportMatch = longUrl.match(/@([-?\d\.]+),([-?\d\.]+),/);
     if (viewportMatch) return [parseFloat(viewportMatch[1]), parseFloat(viewportMatch[2])];
 
