@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { processAutomaticAlert, processManualRouteCheck } from './services';
+import { processPointCheck, processManualRouteCheck } from './services';
 import 'dotenv/config';
 
 const app = new Hono();
@@ -14,18 +14,19 @@ app.get('/', (c) => {
   return c.json({ status: 'ok', bot: 'RainfallBot-TS', runtime: 'Bun + Hono' });
 });
 
-app.post('/owntracks', async (c) => {
+app.post('/check', async (c) => {
   try {
-    const data = await c.req.json();
-    if (data._type === 'location') {
-      const { lat, lon } = data;
-      lastKnownLoc = { lat, lon };
-      // Bun runs these in background automatically if not awaited
-      processAutomaticAlert(lat, lon, NCDR_TOKEN, PRED_CHANNEL);
-      return c.json({ status: 'processing_auto' });
+    const { lat, lon } = await c.req.json();
+    if (lat && lon) {
+      console.log(`[Log] Point check requested for: ${lat}, ${lon}`);
+      lastKnownLoc = { lat: parseFloat(lat), lon: parseFloat(lon) };
+      const resultMsg = await processPointCheck(lastKnownLoc.lat, lastKnownLoc.lon, NCDR_TOKEN);
+      return c.text(resultMsg);
     }
-  } catch (e) {}
-  return c.json({ status: 'ignored' });
+  } catch (e) {
+    return c.text(`Error: ${e}`);
+  }
+  return c.text('Invalid coordinates');
 });
 
 app.post('/route-check', async (c) => {

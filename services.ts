@@ -3,52 +3,16 @@ import { getFullRainData, getRainAtPoint, getAddress, calculateDistance, expandG
 const RAIN_THRESHOLD = 15;
 const RAIN_INTENSIFY_THRESHOLD = 5;
 
-async function getLastState(channel: string) {
-  try {
-    const url = `https://ntfy.sh/${channel}/json?poll=1&last=1`;
-    const resp = await fetch(url);
-    const text = await resp.text();
-    if (!text) return { isAlert: false, maxVal: 0.0 };
-    
-    const lines = text.trim().split("\n");
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const data = JSON.parse(lines[i]);
-      if (data.event === "message") {
-        const title = data.title || "";
-        const isAlert = title.includes("ALERT") || title.includes("INTENSIFIED");
-        const msg = data.message || "";
-        const vals = (msg.match(/:\s*([\d.]+)/g) || []).map((v: string) => parseFloat(v.split(":")[1]));
-        const maxVal = vals.length > 0 ? Math.max(...vals) : 0.0;
-        return { isAlert, maxVal };
-      }
-    }
-  } catch {}
-  return { isAlert: false, maxVal: 0.0 };
-}
-
-export async function processAutomaticAlert(lat: number, lon: number, token: string, channel: string) {
+export async function processPointCheck(lat: number, lon: number, token: string) {
   const rainData = await getFullRainData(token);
   const [t1, t3, t6] = getRainAtPoint(lat, lon, rainData);
-  if (t1 === null) return;
+  if (t1 === null) return "無法取得該位置的降雨資料。";
 
-  const currMax = Math.max(parseFloat(t1), parseFloat(t3 || "0"), parseFloat(t6 || "0"));
-  const { isAlert: lastWasAlert, maxVal: lastMax } = await getLastState(channel);
-  const isRaining = currMax >= RAIN_THRESHOLD;
-
-  if (isRaining) {
-    const intensified = lastWasAlert && (currMax >= lastMax + RAIN_INTENSIFY_THRESHOLD);
-    if (!lastWasAlert || intensified) {
-      const addr = await getAddress(lat, lon);
-      const title = intensified ? "INTENSIFIED" : "Rain Alert";
-      const msg = `📍 ${addr}\n強度：${currMax} dBZ\nT+10: ${t1}\nT+30: ${t3}\nT+60: ${t6}`;
-      console.log(`[Auto] Alert sent for ${addr} (${currMax} dBZ)`);
-      await sendNtfy(channel, msg, title, "high");
-    }
-  } else if (lastWasAlert) {
-    const addr = await getAddress(lat, lon);
-    console.log(`[Auto] Clear message sent for ${addr}`);
-    await sendNtfy(channel, `Rain has stopped at ${addr}`, "CLEAR");
-  }
+  const addr = await getAddress(lat, lon);
+  const maxDbz = Math.max(parseFloat(t1), parseFloat(t3 || "0"), parseFloat(t6 || "0"));
+  const rainIcon = maxDbz >= RAIN_THRESHOLD ? "⛈️" : "✅";
+  
+  return `📍 當前位置：${addr}\n${rainIcon} 降雨強度：${maxDbz} dBZ\n--- 預報 ---\nT+10m: ${t1}\nT+30m: ${t3}\nT+60m: ${t6}`;
 }
 
 export async function processManualRouteCheck(shortUrl: string, currentLoc: {lat: number, lon: number}, token: string, channel: string) {

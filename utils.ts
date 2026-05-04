@@ -49,20 +49,50 @@ export function calculateDistance(lat1: number, lon1: number, lat2: number, lon2
   return R * c;
 }
 
+const BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
 export async function expandGoogleMapsUrl(shortUrl: string) {
   try {
-    const decodedUrl = decodeURIComponent(shortUrl).replace(/\\\//g, "/");
-    // Bun's fetch handles redirects automatically
-    const resp = await fetch(decodedUrl, { redirect: 'follow' });
+    // Clean and decode URL
+    let decodedUrl = decodeURIComponent(shortUrl);
+    // Handle various escaping scenarios (like \/ or \\/)
+    decodedUrl = decodedUrl.replace(/\\+\//g, "/");
+    
+    // Add protocol if missing (some clients might send //maps.app.goo.gl/...)
+    if (decodedUrl.startsWith("//")) decodedUrl = "https:" + decodedUrl;
+
+    const resp = await fetch(decodedUrl, { 
+      redirect: 'follow',
+      headers: { "User-Agent": BROWSER_USER_AGENT }
+    });
     const longUrl = resp.url;
     
-    const coordsMatch = longUrl.match(/!3d([\d\.]+)!4d([\d\.]+)/);
+    // 1. Try standard !3d (lat) !4d (lon) - most common for places
+    const coordsMatch = longUrl.match(/!3d([-?\d\.]+)!4d([-?\d\.]+)/);
     if (coordsMatch) return [parseFloat(coordsMatch[1]), parseFloat(coordsMatch[2])];
     
-    const dirMatch = longUrl.match(/\/dir\/[\d\.]+,[\d\.]+\/([\d\.]+),([\d\.]+)\//);
+    // 2. Try !2d (lat) !1d (lon) - common in some direction URLs
+    // Note: In Google Maps internal data, !1d is often Lon, !2d is Lat
+    const dataMatch = longUrl.match(/!2d([-?\d\.]+)!1d([-?\d\.]+)/);
+    if (dataMatch) {
+      // In some contexts it's [Lat, Lon], in others [Lon, Lat]. 
+      // For Taiwan, Lon is ~121, Lat is ~25.
+      const val1 = parseFloat(dataMatch[1]);
+      const val2 = parseFloat(dataMatch[2]);
+      if (val1 < 90 && val1 > -90 && (val2 > 90 || val2 < -90)) return [val1, val2]; // val1 is lat
+      return [val2, val1]; // assume val2 is lat
+    }
+
+    // 3. Try /dir/lat,lon/lat,lon/ format
+    const dirMatch = longUrl.match(/\/dir\/[-?\d\.]+,[-?\d\.]+\/([-?\d\.]+),([-?\d\.]+)\//);
     if (dirMatch) return [parseFloat(dirMatch[1]), parseFloat(dirMatch[2])];
+
+    // 4. Try @lat,lon viewport format (fallback)
+    const viewportMatch = longUrl.match(/@([-?\d\.]+),([-?\d\.]+),/);
+    if (viewportMatch) return [parseFloat(viewportMatch[1]), parseFloat(viewportMatch[2])];
+
   } catch (e) {
-    console.error(`[Error] URL Expansion Error: ${e}`);
+    console.error(`[Error] URL Expansion Error for ${shortUrl}: ${e}`);
   }
   return [null, null];
 }
